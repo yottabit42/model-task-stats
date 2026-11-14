@@ -1,0 +1,11 @@
+{
+  "model-task-stats": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "./scripts/inject-model.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}
