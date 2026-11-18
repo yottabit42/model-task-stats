@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Antigravity PreInvocation hook for model-task-stats (v1.3.0).
+"""Antigravity PreInvocation hook for model-task-stats (v1.4.0).
 
 Reads transcript.jsonl (and any referenced subagent transcripts) to compute
 exact token usage and date-aware retail API cost for both the current request
@@ -14,11 +14,16 @@ import sys
 
 
 SLUG_THINKING_RE = re.compile(r"^(.*?)-(xhigh|high|medium|low|minimal)$", re.IGNORECASE)
-PAREN_MODEL_RE = re.compile(r"^(.*?)\s*\(([^)]+)\)$")
+PAREN_MODEL_RE = re.compile(r"^(.*?)\s*\((xhigh|high|medium|low|minimal)\)$", re.IGNORECASE)
 SETTINGS_CHANGE_RE = re.compile(
     r"changed setting `Model Selection` from .+? to ((?:[^\n.]|\.(?=\d))+)"
 )
 SUBAGENT_URI_RE = re.compile(r'"logAbsoluteUri":\s*"([^"]+)"')
+
+
+def _normalize_thinking(raw_t: str) -> str:
+    t = raw_t.strip().lower()
+    return "XHigh" if t == "xhigh" else t.capitalize()
 
 
 def parse_model_selection(raw_value: str, default_thinking: str = "High"):
@@ -29,15 +34,14 @@ def parse_model_selection(raw_value: str, default_thinking: str = "High"):
 
     paren = PAREN_MODEL_RE.match(val)
     if paren:
-        return (paren.group(1).strip(), paren.group(2).strip())
+        return (paren.group(1).strip(), _normalize_thinking(paren.group(2)))
 
     thinking = default_thinking
     base = val
     slug_m = SLUG_THINKING_RE.match(val)
     if slug_m:
         base = slug_m.group(1).strip()
-        raw_t = slug_m.group(2).lower()
-        thinking = "XHigh" if raw_t == "xhigh" else raw_t.capitalize()
+        thinking = _normalize_thinking(slug_m.group(2))
 
     s = base.lower()
     if s in ("gemini-4-argon", "gemini 4 argon"):
@@ -46,10 +50,14 @@ def parse_model_selection(raw_value: str, default_thinking: str = "High"):
         return ("Gemini 4 Carbon", thinking)
     if s in ("gemini-4-hydrogen", "gemini 4 hydrogen"):
         return ("Gemini 4 Hydrogen", thinking)
+    if s in ("gemini-4-neon", "gemini 4 neon"):
+        return ("Gemini 4 Neon", thinking)
     if s in ("gemini-pro-orchestrator", "orchestrator (carbon)"):
         return ("Orchestrator (Carbon)", thinking)
     if s in ("gemini-pro-orchestrator-argon", "orchestrator (argon)"):
         return ("Orchestrator (Argon)", thinking)
+    if s in ("gemini-pro-orchestrator-neon", "orchestrator (neon)"):
+        return ("Orchestrator (Neon)", thinking)
 
     m_flite = re.match(r"^gemini-(\d+(?:\.\d+)?)-flash[-_]lite$", s)
     if m_flite:
@@ -78,6 +86,8 @@ def get_rates(model_label: str, date_str: str):
     m = model_label.lower()
     if "gpt-oss" in m:
         return (0.15, 0.075, 0.60)
+    if "neon" in m:
+        return (3.00, 0.15, 15.00)
     if "hydrogen" in m:
         return (1.50, 0.075, 7.50)
     if "claude" in m and "opus" in m:

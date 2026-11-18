@@ -28,7 +28,7 @@ class TestModelTaskStats(unittest.TestCase):
     def test_manifest_hooks_and_skill_exist(self):
         with open(PLUGIN_JSON_PATH, encoding="utf-8") as f:
             pjson = json.load(f)
-        self.assertEqual(pjson["version"], "1.3.0")
+        self.assertEqual(pjson["version"], "1.4.0")
 
         with open(HOOKS_PATH, encoding="utf-8") as f:
             hjson = json.load(f)
@@ -39,6 +39,8 @@ class TestModelTaskStats(unittest.TestCase):
 
     def test_rate_tiers_and_date_cutoffs(self):
         mod = load_script_module()
+        self.assertEqual(mod.get_rates("Gemini 4 Neon", "2026-11-18"), (3.00, 0.15, 15.00))
+        self.assertEqual(mod.get_rates("Orchestrator (Neon)", "2026-11-18"), (3.00, 0.15, 15.00))
         self.assertEqual(mod.get_rates("Gemini 4 Hydrogen", "2026-11-13"), (1.50, 0.075, 7.50))
         self.assertEqual(mod.get_rates("Gemini 4 Hydrogen", "2027-01-01"), (1.50, 0.075, 7.50))
         self.assertEqual(mod.get_rates("Orchestrator (Carbon)", "2026-11-30"), (2.00, 0.10, 10.00))
@@ -58,6 +60,11 @@ class TestModelTaskStats(unittest.TestCase):
 
     def test_slug_parsing_without_settings_change_banner(self):
         cases = [
+            ("gemini-4-neon-low", 'MainModel="Gemini 4 Neon" Thinking="Low"'),
+            ("gemini-4-neon-medium", 'MainModel="Gemini 4 Neon" Thinking="Medium"'),
+            ("gemini-4-neon-high", 'MainModel="Gemini 4 Neon" Thinking="High"'),
+            ("gemini-4-neon-xhigh", 'MainModel="Gemini 4 Neon" Thinking="XHigh"'),
+            ("gemini-pro-orchestrator-neon", 'MainModel="Orchestrator (Neon)" Thinking="High"'),
             ("gemini-4-hydrogen-low", 'MainModel="Gemini 4 Hydrogen" Thinking="Low"'),
             ("gemini-4-hydrogen-medium", 'MainModel="Gemini 4 Hydrogen" Thinking="Medium"'),
             ("gemini-4-hydrogen-high", 'MainModel="Gemini 4 Hydrogen" Thinking="High"'),
@@ -170,9 +177,11 @@ class TestModelTaskStats(unittest.TestCase):
         with open(AGENTS_MD_PATH, encoding="utf-8") as f:
             txt = f.read()
         for model_name in [
+            "Gemini 4 Neon",
             "Gemini 4 Hydrogen",
             "Gemini 4 Argon",
             "Gemini 4 Carbon",
+            "Orchestrator (Neon)",
             "Orchestrator (Carbon)",
             "Orchestrator (Argon)",
             "Claude Opus 5.5",

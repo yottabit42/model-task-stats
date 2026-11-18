@@ -28,6 +28,7 @@ Start a new Antigravity session so `rules/AGENTS.md` is loaded into the active r
 
 | Model | Uncached Input | Cached Input | Output (incl. thinking) |
 | :--- | :--- | :--- | :--- |
+| **Gemini 4 Neon / Orchestrator (Neon)** | `$3.00` | `$0.15` | `$15.00` |
 | **Gemini 4 Hydrogen** | `$1.50` | `$0.075` | `$7.50` |
 | **Gemini 4 Argon / Carbon / Orchestrator** *(through 2026-11-30)* | `$2.00` | `$0.10` | `$10.00` |
 | **Gemini 4 Argon / Carbon / Orchestrator** *(from 2026-12-01)* | `$4.00` | `$0.20` | `$20.00` |

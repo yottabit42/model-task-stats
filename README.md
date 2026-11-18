@@ -27,6 +27,7 @@ An Antigravity (`agy`) plugin and skill that automatically tracks per-request an
 
 | Model | Uncached Input | Cached Input | Output (incl. thinking) |
 | :--- | :--- | :--- | :--- |
+| **Gemini 4 Neon, Orchestrator (Neon)** | `$3.00` | `$0.15` | `$15.00` |
 | **Gemini 4 Hydrogen** | `$1.50` | `$0.075` | `$7.50` |
 | **Gemini 4 Argon, Gemini 4 Carbon, Orchestrator (Argon / Carbon)** *(through 2026-11-30)* | `$2.00` | `$0.10` | `$10.00` |
 | **Gemini 4 Argon, Gemini 4 Carbon, Orchestrator (Argon / Carbon)** *(starting 2026-12-01)* | `$4.00` | `$0.20` | `$20.00` |

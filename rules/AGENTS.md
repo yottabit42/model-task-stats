@@ -17,7 +17,7 @@ At the very end of every completed user request (after all tool calls, subagent 
 
 ## 3. How to Identify Models and Thinking Levels
 - **Model Name**:
-  1. Use the human-readable model name from `<USER_SETTINGS_CHANGE>` or `MainModel` in `[Model Task & Cost Telemetry ...]` (e.g., `Gemini 4 Hydrogen`, `Gemini 4 Carbon`, `Gemini 4 Argon`, `Orchestrator (Carbon)`, `Orchestrator (Argon)`, `Gemini 3.8 Flash`, `Claude Opus 5.5`, `Claude Sonnet 5.5`, `GPT-OSS 120B`).
+  1. Use the human-readable model name from `<USER_SETTINGS_CHANGE>` or `MainModel` in `[Model Task & Cost Telemetry ...]` (e.g., `Gemini 4 Neon`, `Gemini 4 Hydrogen`, `Gemini 4 Carbon`, `Gemini 4 Argon`, `Orchestrator (Neon)`, `Orchestrator (Carbon)`, `Orchestrator (Argon)`, `Gemini 3.8 Flash`, `Claude Opus 5.5`, `Claude Sonnet 5.5`, `GPT-OSS 120B`).
   2. For subagents dispatched via `invoke_subagent`, label the model by its resolved tier/name (e.g., `Gemini Flash *(Subagent)*` when `Model: "flash"` or `TypeName: "*-flash"`, `Gemini Flash-Lite *(Subagent)*` for `flash_lite`, `Gemini Pro *(Subagent)*` for `pro`, or `<Main Model> *(Subagent)*` for `inherit`).
 - **Thinking Level**:
   - Read `EFFORT LEVEL: <value>` from your system instructions (and/or `Thinking` in `[Model Task & Cost Telemetry ...]` / `<USER_SETTINGS_CHANGE>`) and format as:
@@ -33,6 +33,8 @@ At the very end of every completed user request (after all tool calls, subagent 
   - Use `est_cost_including_this_final_response`, `CurrentRequestTotalEstCost`, and `SessionAggregateEstCost` injected by `[Model Task & Cost Telemetry ...]`.
 - **Fallback Formula (if hook telemetry is unavailable for a step)**:
   - Apply standard retail API Paid Tier pricing (with cached-input discount):
+    - **Gemini 4 Neon & Orchestrator (Neon)**:
+      - `\$3.00 / 1M` uncached input · `\$0.15 / 1M` cached input · `\$15.00 / 1M` output (incl. thinking)
     - **Gemini 4 Hydrogen**:
       - `\$1.50 / 1M` uncached input · `\$0.075 / 1M` cached input · `\$7.50 / 1M` output (incl. thinking)
     - **Gemini 4 Argon, Gemini 4 Carbon, Orchestrator (Argon), Orchestrator (Carbon)**:
