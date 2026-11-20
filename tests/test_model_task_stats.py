@@ -28,7 +28,7 @@ class TestModelTaskStats(unittest.TestCase):
     def test_manifest_hooks_and_skill_exist(self):
         with open(PLUGIN_JSON_PATH, encoding="utf-8") as f:
             pjson = json.load(f)
-        self.assertEqual(pjson["version"], "1.4.0")
+        self.assertEqual(pjson["version"], "1.5.0")
 
         with open(HOOKS_PATH, encoding="utf-8") as f:
             hjson = json.load(f)
@@ -188,8 +188,87 @@ class TestModelTaskStats(unittest.TestCase):
             "Claude Sonnet 5.5",
             "GPT-OSS 120B",
             "XHigh",
+            "SessionAggregateByModel",
+            "(Session)",
         ]:
             self.assertIn(model_name, txt)
+
+    def test_session_aggregate_by_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sub1 = os.path.join(tmp, "sub1.jsonl")
+            main_t = os.path.join(tmp, "transcript.jsonl")
+
+            with open(sub1, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "input_tokens": 10000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 1000,
+                    "tool_calls": [{"name": "read_file"}],
+                }) + "\n")
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "input_tokens": 2000,
+                    "cache_read_tokens": 10000,
+                    "output_tokens": 500,
+                    "content": "Subagent done",
+                }) + "\n")
+
+            steps = [
+                {
+                    "type": "USER_INPUT",
+                    "content": "Turn 1\nThe user changed setting `Model Selection` from None to Gemini 4 Carbon (High).",
+                },
+                {
+                    "type": "PLANNER_RESPONSE",
+                    "input_tokens": 10000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 1000,
+                    "tool_calls": [
+                        {"name": "invoke_subagent", "args": {"TypeName": "research", "Model": "flash"}},
+                    ],
+                },
+                {
+                    "type": "GENERIC",
+                    "content": f'Created the following subagent:\n{{\n  "conversationId": "s1",\n  "logAbsoluteUri": "file://{sub1}"\n}}',
+                },
+                {
+                    "type": "PLANNER_RESPONSE",
+                    "input_tokens": 2000,
+                    "cache_read_tokens": 10000,
+                    "output_tokens": 500,
+                    "content": "Turn 1 complete",
+                },
+                {
+                    "type": "USER_INPUT",
+                    "content": "Turn 2\nThe user changed setting `Model Selection` from Gemini 4 Carbon (High) to Gemini 4 Neon (Medium).",
+                },
+                {
+                    "type": "PLANNER_RESPONSE",
+                    "input_tokens": 5000,
+                    "cache_read_tokens": 12000,
+                    "output_tokens": 500,
+                    "tool_calls": [{"name": "read_file"}, {"name": "edit_file"}],
+                },
+            ]
+            with open(main_t, "w", encoding="utf-8") as f:
+                for st in steps:
+                    f.write(json.dumps(st) + "\n")
+
+            payload = json.dumps({"modelName": "gemini-4-neon-medium", "transcriptPath": main_t})
+            res = subprocess.run(
+                ["./scripts/inject-model.sh"],
+                cwd=PLUGIN_DIR,
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            msg = json.loads(res.stdout)["injectSteps"][0]["systemMessage"]["systemMessage"]
+            self.assertIn("SessionAggregateByModel:", msg)
+            self.assertIn("Gemini 4 Carbon: 1 tool calls, 1 resp, cost=$", msg)
+            self.assertIn("Gemini Flash (Subagent): 1 tool calls, 1 resp, cost=$", msg)
+            self.assertIn("Gemini 4 Neon: 2 tool calls, 1 resp, cost=$", msg)
 
 
 if __name__ == "__main__":

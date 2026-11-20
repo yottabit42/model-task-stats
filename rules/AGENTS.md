@@ -1,6 +1,6 @@
 # Per-Request Model, Thinking Level & Retail Token Cost Summary Rule
 
-At the very end of every completed user request (after all tool calls, subagent invocations, and final synthesis for that request are finished), you MUST append a 4-column Markdown summary table reporting the models used, their thinking levels, tasks performed, and approximate retail token cost (plus `**Request Total**` and `**Session Aggregate**` rows).
+At the very end of every completed user request (after all tool calls, subagent invocations, and final synthesis for that request are finished), you MUST append a 4-column Markdown summary table reporting the models used, their thinking levels, tasks performed, and approximate retail token cost (plus `**Request Total**`, per-model `*<Model Name> (Session)*` aggregate rows, and `**Session Aggregate**`).
 
 ## 1. When to Include the Summary Table
 - **Include**: At the bottom of the final response that completes a user request (including after multi-turn interactive flows such as `/grill-me` or `ask_question` once the final answer or implementation for the request is delivered).
@@ -13,6 +13,7 @@ At the very end of every completed user request (after all tool calls, subagent 
   `<Total> (<N> tool calls, <M> response)` (using singular `tool call` / `response` when `1`, and `responses` when `> 1`).
   - Example with 4 tool calls and 1 final response: `5 (4 tool calls, 1 response)`
   - Example for a pure Q&A turn with 0 tool calls: `1 (0 tool calls, 1 response)`
+- For per-model session aggregates, render one `*<Model Name> (Session)*` row per entry in `SessionAggregateByModel` from `[Model Task & Cost Telemetry ...]` (showing cumulative tool calls, responses, and cost for each model used across the session).
 - For the `**Session Aggregate**` row, add the current request's tasks (`tool calls` and `responses`) to the `SessionPriorRequests` counts injected by `[Model Task & Cost Telemetry ...]`.
 
 ## 3. How to Identify Models and Thinking Levels
@@ -30,7 +31,7 @@ At the very end of every completed user request (after all tool calls, subagent 
 
 ## 4. How to Calculate Approximate Retail Token Cost (`Est. Retail Cost`)
 - **Primary Source (`PreInvocation` Hook Telemetry)**:
-  - Use `est_cost_including_this_final_response`, `CurrentRequestTotalEstCost`, and `SessionAggregateEstCost` injected by `[Model Task & Cost Telemetry ...]`.
+  - Use `est_cost_including_this_final_response`, `CurrentRequestTotalEstCost`, `SessionAggregateByModel`, and `SessionAggregateEstCost` injected by `[Model Task & Cost Telemetry ...]`.
 - **Fallback Formula (if hook telemetry is unavailable for a step)**:
   - Apply standard retail API Paid Tier pricing (with cached-input discount):
     - **Gemini 4 Neon & Orchestrator (Neon)**:
@@ -67,5 +68,7 @@ At the very end of every completed user request (after all tool calls, subagent 
 | :--- | :--- | :--- | :--- |
 | <Model Name> | <Level> (`<EFFORT_LEVEL>`) | <Total> (<N> tool calls, <M> response) | ~\$<X.XXXX> |
 | **Request Total** | — | **<ReqTotal> (<ReqTC> tool calls, <ReqResp> response)** | **~\$<ReqCost>** |
+| *<Model A> (Session)* | — | <TotalA> (<TCA> tool calls, <RespA> responses) | ~\$<CostA> |
+| *<Model B> (Session)* | — | <TotalB> (<TCB> tool calls, <RespB> responses) | ~\$<CostB> |
 | **Session Aggregate** | — | **<SessTotal> (<SessTC> tool calls, <SessResp> responses)** | **~\$<SessCost>** |
 ```

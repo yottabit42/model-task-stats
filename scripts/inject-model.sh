@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Antigravity PreInvocation hook for model-task-stats (v1.4.0).
+"""Antigravity PreInvocation hook for model-task-stats (v1.5.0).
 
 Reads transcript.jsonl (and any referenced subagent transcripts) to compute
-exact token usage and date-aware retail API cost for both the current request
-and the cumulative conversation session.
+exact token usage and date-aware retail API cost for the current request,
+per-model session aggregates, and the cumulative conversation session.
 """
 import collections
 import datetime
@@ -192,9 +192,17 @@ def main():
             if m:
                 active_model, active_thinking = parse_model_selection(m.group(1), active_thinking)
 
+    def _empty_stats():
+        return {"tool_calls": 0, "responses": 0, "in": 0, "cache": 0, "out": 0, "cost": 0.0}
+
+    def _add_stats(dest, src):
+        for k in dest:
+            dest[k] += src[k]
+
     def summarize_slice(slice_steps, start_model):
         cur_model = start_model
-        main_stats = {"tool_calls": 0, "responses": 0, "in": 0, "cache": 0, "out": 0, "cost": 0.0}
+        main_stats = _empty_stats()
+        main_by_model = {}
         subagents = {}
         pending_sub_models = collections.deque()
         seen_sub_uris = set()
@@ -212,13 +220,18 @@ def main():
                 if in_t + cache_t > 0:
                     last_step_context = in_t + cache_t
                 tcs = st.get("tool_calls") or []
-                main_stats["in"] += in_t
-                main_stats["cache"] += cache_t
-                main_stats["out"] += out_t
-                main_stats["tool_calls"] += len(tcs)
-                if not tcs and st.get("content"):
-                    main_stats["responses"] += 1
-                main_stats["cost"] += compute_cost(in_t, cache_t, out_t, cur_model, today_str)
+                is_resp = 1 if (not tcs and st.get("content")) else 0
+                step_cost = compute_cost(in_t, cache_t, out_t, cur_model, today_str)
+                step_stats = {
+                    "tool_calls": len(tcs),
+                    "responses": is_resp,
+                    "in": in_t,
+                    "cache": cache_t,
+                    "out": out_t,
+                    "cost": step_cost,
+                }
+                _add_stats(main_stats, step_stats)
+                _add_stats(main_by_model.setdefault(cur_model, _empty_stats()), step_stats)
 
                 for tc in tcs:
                     if tc.get("name") == "invoke_subagent":
@@ -243,24 +256,14 @@ def main():
                         if uri not in seen_sub_uris:
                             seen_sub_uris.add(uri)
                             sub_s = parse_subagent_transcript(uri, sub_model, today_str)
-                            if sub_model not in subagents:
-                                subagents[sub_model] = {
-                                    "tool_calls": 0,
-                                    "responses": 0,
-                                    "in": 0,
-                                    "cache": 0,
-                                    "out": 0,
-                                    "cost": 0.0,
-                                }
-                            for k in subagents[sub_model]:
-                                subagents[sub_model][k] += sub_s[k]
+                            _add_stats(subagents.setdefault(sub_model, _empty_stats()), sub_s)
 
-        return main_stats, subagents, last_step_context, cur_model
+        return main_stats, main_by_model, subagents, last_step_context, cur_model
 
-    prior_main, prior_subs, prior_ctx, model_after_prior = summarize_slice(
+    prior_main, prior_main_by_model, prior_subs, prior_ctx, model_after_prior = summarize_slice(
         steps[:last_user_idx], initial_model
     )
-    req_main, req_subs, req_ctx, _ = summarize_slice(
+    req_main, req_main_by_model, req_subs, req_ctx, _ = summarize_slice(
         steps[last_user_idx:], model_after_prior
     )
 
@@ -278,6 +281,14 @@ def main():
 
     session_est_cost = prior_total_cost + req_total_est_cost
 
+    session_by_model = {}
+    for source in (prior_main_by_model, prior_subs, req_main_by_model, req_subs):
+        for k, v in source.items():
+            _add_stats(session_by_model.setdefault(k, _empty_stats()), v)
+    active_sess = session_by_model.setdefault(active_model, _empty_stats())
+    active_sess["responses"] += 1
+    active_sess["cost"] += est_final_step_cost
+
     sub_parts = []
     for k, v in req_subs.items():
         tc_cnt = v["tool_calls"]
@@ -285,6 +296,13 @@ def main():
         c_val = v["cost"]
         sub_parts.append(f"{k}: {tc_cnt} tool calls, {resp_cnt} resp, cost=${c_val:.4f}")
     sub_str = "; ".join(sub_parts) if sub_parts else "none"
+
+    sess_model_parts = []
+    for k, v in session_by_model.items():
+        sess_model_parts.append(
+            f"{k}: {v['tool_calls']} tool calls, {v['responses']} resp, cost=${v['cost']:.4f}"
+        )
+    sess_model_str = "; ".join(sess_model_parts) if sess_model_parts else "none"
 
     req_tc = req_main["tool_calls"]
     req_c_done = req_main["cost"]
@@ -298,6 +316,7 @@ def main():
         f"CurrentRequestSubagents: {sub_str} | "
         f"CurrentRequestTotalEstCost=${req_total_est_cost:.4f} | "
         f"SessionPriorRequests: tool_calls={prior_total_tc}, responses={prior_total_resp}, cost=${prior_total_cost:.4f} | "
+        f"SessionAggregateByModel: {sess_model_str} | "
         f"SessionAggregateEstCost=${session_est_cost:.4f}]"
     )
 

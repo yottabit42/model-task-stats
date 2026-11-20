@@ -9,7 +9,7 @@ description: "Use when installing, verifying, troubleshooting, or customizing pe
 
 Provides per-request and session-aggregate token cost and task-count visibility in Antigravity (`agy`) via:
 1. **`PreInvocation` hook** (`hooks.json` + `scripts/inject-model.sh`) — reads `transcript.jsonl` and any spawned subagent transcripts, computes date-aware retail API costs, and injects a `[Model Task & Cost Telemetry ...]` system message before each model call.
-2. **Always-on rule** (`rules/AGENTS.md`) — instructs the agent to append a 4-column Markdown summary table (`Model | Thinking Level | Tasks Performed | Est. Retail Cost`, plus **Request Total** and **Session Aggregate**) at the end of every completed user request.
+2. **Always-on rule** (`rules/AGENTS.md`) — instructs the agent to append a 4-column Markdown summary table (`Model | Thinking Level | Tasks Performed | Est. Retail Cost`, plus **Request Total**, per-model `*(Session)*` aggregates, and **Session Aggregate**) at the end of every completed user request.
 
 ## Installation (Global Plugin)
 
