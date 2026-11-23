@@ -28,7 +28,7 @@ class TestModelTaskStats(unittest.TestCase):
     def test_manifest_hooks_and_skill_exist(self):
         with open(PLUGIN_JSON_PATH, encoding="utf-8") as f:
             pjson = json.load(f)
-        self.assertEqual(pjson["version"], "1.5.0")
+        self.assertEqual(pjson["version"], "1.6.0")
 
         with open(HOOKS_PATH, encoding="utf-8") as f:
             hjson = json.load(f)
@@ -74,6 +74,7 @@ class TestModelTaskStats(unittest.TestCase):
             ("gemini-4-carbon-medium", 'MainModel="Gemini 4 Carbon" Thinking="Medium"'),
             ("gemini-4-argon-low", 'MainModel="Gemini 4 Argon" Thinking="Low"'),
             ("gemini-3.8-flash-high", 'MainModel="Gemini 3.8 Flash" Thinking="High"'),
+            ("gemini-flash-worker-agy", 'MainModel="Gemini Flash" Thinking="High"'),
             ("claude-opus-5-5-high", 'MainModel="Claude Opus 5.5" Thinking="High"'),
             ("claude-sonnet-5-5-low", 'MainModel="Claude Sonnet 5.5" Thinking="Low"'),
             ("gpt-oss-120b-medium", 'MainModel="GPT-OSS 120B" Thinking="Medium"'),
@@ -190,6 +191,8 @@ class TestModelTaskStats(unittest.TestCase):
             "XHigh",
             "SessionAggregateByModel",
             "(Session)",
+            "SwarmWorkers",
+            "(Swarm)",
         ]:
             self.assertIn(model_name, txt)
 
@@ -269,6 +272,115 @@ class TestModelTaskStats(unittest.TestCase):
             self.assertIn("Gemini 4 Carbon: 1 tool calls, 1 resp, cost=$", msg)
             self.assertIn("Gemini Flash (Subagent): 1 tool calls, 1 resp, cost=$", msg)
             self.assertIn("Gemini 4 Neon: 2 tool calls, 1 resp, cost=$", msg)
+
+    def test_orchestrator_per_step_and_swarm_non_gemini_workers(self):
+        with tempfile.TemporaryDirectory() as brain_root:
+            coord_id = "coord-1111"
+            w_claude_id = "worker-claude-2222"
+            w_gpt_id = "worker-gpt-3333"
+
+            coord_logs = os.path.join(brain_root, coord_id, ".system_generated", "logs")
+            coord_swarm = os.path.join(brain_root, coord_id, ".system_generated", "swarm")
+            w_claude_logs = os.path.join(brain_root, w_claude_id, ".system_generated", "logs")
+            w_gpt_logs = os.path.join(brain_root, w_gpt_id, ".system_generated", "logs")
+            for d in (coord_logs, coord_swarm, w_claude_logs, w_gpt_logs):
+                os.makedirs(d, exist_ok=True)
+
+            # Swarm members.json with non-Gemini workers
+            members_json = {
+                "title": "Test Swarm",
+                "members": {
+                    "backend": {
+                        "conversation_id": w_claude_id,
+                        "role": "worker",
+                        "applied_model": "claude-opus-5-5-high",
+                    },
+                    "reviewer": {
+                        "conversation_id": w_gpt_id,
+                        "role": "worker",
+                        "applied_model": "gpt-oss-120b-medium",
+                    },
+                },
+            }
+            with open(os.path.join(coord_swarm, "members.json"), "w", encoding="utf-8") as f:
+                json.dump(members_json, f)
+
+            # Claude worker switches mid-run from Opus 5.5 to Sonnet 5.5
+            with open(os.path.join(w_claude_logs, "transcript.jsonl"), "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "claude-opus-5-5-high",
+                    "input_tokens": 100000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 5000,
+                    "tool_calls": [{"name": "write_file"}, {"name": "run_command"}],
+                }) + "\n")
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "claude-sonnet-5-5-high",
+                    "input_tokens": 50000,
+                    "cache_read_tokens": 100000,
+                    "output_tokens": 2000,
+                    "content": "Backend done",
+                }) + "\n")
+
+            # GPT-OSS worker
+            with open(os.path.join(w_gpt_logs, "transcript.jsonl"), "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "gpt-oss-120b-medium",
+                    "input_tokens": 200000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 10000,
+                    "tool_calls": [{"name": "read_file"}],
+                }) + "\n")
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "gpt-oss-120b-medium",
+                    "input_tokens": 10000,
+                    "cache_read_tokens": 200000,
+                    "output_tokens": 1000,
+                    "content": "Review done",
+                }) + "\n")
+
+            # Coordinator transcript using Orchestrator (Neon) + per-step gemini-flash-worker-agy
+            coord_t = os.path.join(coord_logs, "transcript.jsonl")
+            with open(coord_t, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "USER_INPUT", "content": "/swarm Build app"}) + "\n")
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "gemini-pro-orchestrator-neon",
+                    "input_tokens": 20000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 1000,
+                    "tool_calls": [{"name": "swarm"}],
+                }) + "\n")
+                f.write(json.dumps({
+                    "type": "PLANNER_RESPONSE",
+                    "model": "gemini-flash-worker-agy",
+                    "input_tokens": 10000,
+                    "cache_read_tokens": 20000,
+                    "output_tokens": 500,
+                    "tool_calls": [{"name": "read_file"}],
+                }) + "\n")
+
+            payload = json.dumps({"modelName": "gemini-pro-orchestrator-neon", "transcriptPath": coord_t})
+            res = subprocess.run(
+                ["./scripts/inject-model.sh"],
+                cwd=PLUGIN_DIR,
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            msg = json.loads(res.stdout)["injectSteps"][0]["systemMessage"]["systemMessage"]
+            self.assertIn("SwarmWorkers:", msg)
+            self.assertIn("Claude Opus 5.5 (Swarm): 2 tool calls, 0 resp, cost=$0.5000", msg)
+            self.assertIn("Claude Sonnet 5.5 (Swarm): 0 tool calls, 1 resp, cost=$0.1300", msg)
+            self.assertIn("GPT-OSS 120B (Swarm): 1 tool calls, 1 resp, cost=$0.0531", msg)
+            self.assertIn("Orchestrator (Neon): 1 tool calls, 1 resp, cost=$", msg)
+            self.assertIn("Gemini Flash: 1 tool calls, 0 resp, cost=$", msg)
+            self.assertIn("SessionAggregateTotals: tool_calls=5, responses=3", msg)
 
 
 if __name__ == "__main__":

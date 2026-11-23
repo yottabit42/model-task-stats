@@ -1,8 +1,8 @@
 {
   "name": "model-task-stats",
   "displayName": "Per-Request Model, Thinking & Retail Cost Summary",
-  "version": "1.5.0",
-  "description": "Appends a 4-column Markdown summary table at the end of every completed request showing the models used, thinking levels, tasks performed, and approximate retail token cost (per-request, per-model session aggregates, and overall session aggregate).",
+  "version": "1.6.0",
+  "description": "Appends a 4-column Markdown summary table at the end of every completed request showing the models used (including Orchestrator per-step routing and /swarm Gemini/Claude/GPT-OSS workers), thinking levels, tasks performed, and approximate retail token cost.",
   "author": {
     "name": "Jacob McDonald"
   },

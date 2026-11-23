@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Antigravity PreInvocation hook for model-task-stats (v1.5.0).
+"""Antigravity PreInvocation hook for model-task-stats (v1.6.0).
 
-Reads transcript.jsonl (and any referenced subagent transcripts) to compute
-exact token usage and date-aware retail API cost for the current request,
-per-model session aggregates, and the cumulative conversation session.
+Reads transcript.jsonl, referenced subagent transcripts, and /swarm worker
+transcripts (including Claude, GPT-OSS, and Gemini models) to compute exact
+token usage and date-aware retail API cost for the current request, per-model
+session aggregates, and the cumulative conversation session.
 """
 import collections
 import datetime
@@ -19,6 +20,15 @@ SETTINGS_CHANGE_RE = re.compile(
     r"changed setting `Model Selection` from .+? to ((?:[^\n.]|\.(?=\d))+)"
 )
 SUBAGENT_URI_RE = re.compile(r'"logAbsoluteUri":\s*"([^"]+)"')
+
+
+def _empty_stats():
+    return {"tool_calls": 0, "responses": 0, "in": 0, "cache": 0, "out": 0, "cost": 0.0}
+
+
+def _add_stats(dest, src):
+    for k in dest:
+        dest[k] += src[k]
 
 
 def _normalize_thinking(raw_t: str) -> str:
@@ -58,6 +68,8 @@ def parse_model_selection(raw_value: str, default_thinking: str = "High"):
         return ("Orchestrator (Argon)", thinking)
     if s in ("gemini-pro-orchestrator-neon", "orchestrator (neon)"):
         return ("Orchestrator (Neon)", thinking)
+    if s.startswith("gemini-flash-worker"):
+        return ("Gemini Flash", thinking)
 
     m_flite = re.match(r"^gemini-(\d+(?:\.\d+)?)-flash[-_]lite$", s)
     if m_flite:
@@ -101,7 +113,7 @@ def get_rates(model_label: str, date_str: str):
         if date_str <= "2026-12-31":
             return (0.75, 0.075, 3.75)
         return (1.50, 0.15, 7.50)
-    # Default / Flagship (Gemini 4 Argon, Gemini 4 Carbon, Gemini Pro)
+    # Default / Flagship (Gemini 4 Argon, Gemini 4 Carbon, Orchestrator)
     # Introductory pricing through 2026-11-30
     if date_str <= "2026-11-30":
         return (2.00, 0.10, 10.00)
@@ -113,11 +125,21 @@ def compute_cost(in_tok: int, cache_tok: int, out_tok: int, model_label: str, da
     return (in_tok * r_in + cache_tok * r_cache + out_tok * r_out) / 1_000_000.0
 
 
-def parse_subagent_transcript(uri_or_path: str, sub_model_label: str, date_str: str) -> dict:
+def _with_suffix(label: str, suffix: str) -> str:
+    if not suffix or label.endswith(suffix):
+        return label
+    return f"{label} {suffix}"
+
+
+def parse_child_transcript(uri_or_path: str, default_model_label: str, date_str: str, label_suffix: str) -> dict:
+    """Parses a subagent or swarm worker transcript, attributing each PLANNER_RESPONSE by its per-step model."""
     path = uri_or_path.replace("file://", "")
-    stats = {"tool_calls": 0, "responses": 0, "in": 0, "cache": 0, "out": 0, "cost": 0.0}
+    by_model = {}
     if not os.path.isfile(path):
-        return stats
+        return by_model
+    last_label = None
+    total_resp = 0
+    total_activity = 0
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -125,22 +147,87 @@ def parse_subagent_transcript(uri_or_path: str, sub_model_label: str, date_str: 
                     continue
                 step = json.loads(line)
                 if step.get("type") == "PLANNER_RESPONSE":
+                    raw_step_model = str(step.get("model") or "").strip()
+                    if raw_step_model and raw_step_model.lower() != "auto":
+                        step_model_name, _ = parse_model_selection(raw_step_model)
+                        label = _with_suffix(step_model_name, label_suffix)
+                    else:
+                        label = _with_suffix(default_model_label, label_suffix)
                     in_t = int(step.get("input_tokens", 0) or 0)
                     cache_t = int(step.get("cache_read_tokens", 0) or 0)
                     out_t = int(step.get("output_tokens", 0) or 0)
                     tcs = step.get("tool_calls") or []
-                    stats["in"] += in_t
-                    stats["cache"] += cache_t
-                    stats["out"] += out_t
-                    stats["tool_calls"] += len(tcs)
-                    if not tcs and step.get("content"):
-                        stats["responses"] += 1
-        if stats["responses"] == 0 and (stats["in"] > 0 or stats["tool_calls"] > 0):
-            stats["responses"] = 1
-        stats["cost"] = compute_cost(stats["in"], stats["cache"], stats["out"], sub_model_label, date_str)
+                    is_resp = 1 if (not tcs and step.get("content")) else 0
+                    step_stats = {
+                        "tool_calls": len(tcs),
+                        "responses": is_resp,
+                        "in": in_t,
+                        "cache": cache_t,
+                        "out": out_t,
+                        "cost": compute_cost(in_t, cache_t, out_t, label, date_str),
+                    }
+                    _add_stats(by_model.setdefault(label, _empty_stats()), step_stats)
+                    last_label = label
+                    total_resp += is_resp
+                    total_activity += in_t + len(tcs)
+        if total_resp == 0 and total_activity > 0 and last_label:
+            by_model[last_label]["responses"] += 1
     except Exception:
         pass
-    return stats
+    return by_model
+
+
+def discover_swarm_workers(transcript_path: str, fallback_model: str, date_str: str, seen_paths: set) -> dict:
+    """Discovers /swarm workers from .system_generated/swarm/members.json and parses their transcripts."""
+    swarm_by_model = {}
+    abs_t = os.path.abspath(transcript_path)
+    logs_dir = os.path.dirname(abs_t)
+    sysgen_dir = os.path.dirname(logs_dir)
+    if os.path.basename(logs_dir) != "logs" or os.path.basename(sysgen_dir) != ".system_generated":
+        return swarm_by_model
+
+    conv_dir = os.path.dirname(sysgen_dir)
+    brain_root = os.path.dirname(conv_dir)
+    root_conv_id = os.path.basename(conv_dir)
+
+    queue = collections.deque([root_conv_id])
+    seen_conv_ids = {root_conv_id}
+
+    while queue:
+        cid = queue.popleft()
+        members_path = os.path.join(brain_root, cid, ".system_generated", "swarm", "members.json")
+        if not os.path.isfile(members_path):
+            continue
+        try:
+            with open(members_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        members = data.get("members") or {}
+        if not isinstance(members, dict):
+            continue
+        for member in members.values():
+            if not isinstance(member, dict):
+                continue
+            w_cid = str(member.get("conversation_id") or "").strip()
+            if not w_cid or w_cid in seen_conv_ids or member.get("role") == "coordinator":
+                continue
+            seen_conv_ids.add(w_cid)
+            queue.append(w_cid)
+
+            w_transcript = os.path.join(brain_root, w_cid, ".system_generated", "logs", "transcript.jsonl")
+            if w_transcript in seen_paths:
+                continue
+            seen_paths.add(w_transcript)
+
+            raw_w_model = str(member.get("applied_model") or member.get("desired_model") or fallback_model)
+            w_model_name, _ = parse_model_selection(raw_w_model)
+            worker_stats = parse_child_transcript(w_transcript, w_model_name, date_str, "(Swarm)")
+            for k, v in worker_stats.items():
+                _add_stats(swarm_by_model.setdefault(k, _empty_stats()), v)
+
+    return swarm_by_model
 
 
 def main():
@@ -192,12 +279,7 @@ def main():
             if m:
                 active_model, active_thinking = parse_model_selection(m.group(1), active_thinking)
 
-    def _empty_stats():
-        return {"tool_calls": 0, "responses": 0, "in": 0, "cache": 0, "out": 0, "cost": 0.0}
-
-    def _add_stats(dest, src):
-        for k in dest:
-            dest[k] += src[k]
+    seen_child_paths = {os.path.abspath(transcript_path)}
 
     def summarize_slice(slice_steps, start_model):
         cur_model = start_model
@@ -205,7 +287,6 @@ def main():
         main_by_model = {}
         subagents = {}
         pending_sub_models = collections.deque()
-        seen_sub_uris = set()
         last_step_context = 0
 
         for st in slice_steps:
@@ -214,6 +295,11 @@ def main():
                 if m:
                     cur_model, _ = parse_model_selection(m.group(1))
             elif st.get("type") == "PLANNER_RESPONSE":
+                raw_step_model = str(st.get("model") or "").strip()
+                if raw_step_model and raw_step_model.lower() != "auto":
+                    step_model, _ = parse_model_selection(raw_step_model)
+                else:
+                    step_model = cur_model
                 in_t = int(st.get("input_tokens", 0) or 0)
                 cache_t = int(st.get("cache_read_tokens", 0) or 0)
                 out_t = int(st.get("output_tokens", 0) or 0)
@@ -221,7 +307,7 @@ def main():
                     last_step_context = in_t + cache_t
                 tcs = st.get("tool_calls") or []
                 is_resp = 1 if (not tcs and st.get("content")) else 0
-                step_cost = compute_cost(in_t, cache_t, out_t, cur_model, today_str)
+                step_cost = compute_cost(in_t, cache_t, out_t, step_model, today_str)
                 step_stats = {
                     "tool_calls": len(tcs),
                     "responses": is_resp,
@@ -231,7 +317,7 @@ def main():
                     "cost": step_cost,
                 }
                 _add_stats(main_stats, step_stats)
-                _add_stats(main_by_model.setdefault(cur_model, _empty_stats()), step_stats)
+                _add_stats(main_by_model.setdefault(step_model, _empty_stats()), step_stats)
 
                 for tc in tcs:
                     if tc.get("name") == "invoke_subagent":
@@ -253,10 +339,12 @@ def main():
                     if uri_m:
                         sub_model = pending_sub_models.popleft()
                         uri = uri_m.group(1)
-                        if uri not in seen_sub_uris:
-                            seen_sub_uris.add(uri)
-                            sub_s = parse_subagent_transcript(uri, sub_model, today_str)
-                            _add_stats(subagents.setdefault(sub_model, _empty_stats()), sub_s)
+                        abs_sub = os.path.abspath(uri.replace("file://", ""))
+                        if abs_sub not in seen_child_paths:
+                            seen_child_paths.add(abs_sub)
+                            sub_by_m = parse_child_transcript(uri, sub_model, today_str, "(Subagent)")
+                            for k, v in sub_by_m.items():
+                                _add_stats(subagents.setdefault(k, _empty_stats()), v)
 
         return main_stats, main_by_model, subagents, last_step_context, cur_model
 
@@ -266,6 +354,8 @@ def main():
     req_main, req_main_by_model, req_subs, req_ctx, _ = summarize_slice(
         steps[last_user_idx:], model_after_prior
     )
+
+    swarm_by_model = discover_swarm_workers(transcript_path, active_model, today_str, seen_child_paths)
 
     baseline_ctx = req_ctx if req_ctx > 0 else (prior_ctx if prior_ctx > 0 else 25000)
     est_final_step_cost = compute_cost(1500, baseline_ctx, 450, active_model, today_str)
@@ -279,30 +369,31 @@ def main():
     prior_total_tc = prior_main["tool_calls"] + sum(v["tool_calls"] for v in prior_subs.values())
     prior_total_resp = prior_main["responses"] + sum(v["responses"] for v in prior_subs.values())
 
-    session_est_cost = prior_total_cost + req_total_est_cost
+    swarm_total_cost = sum(v["cost"] for v in swarm_by_model.values())
+    session_est_cost = prior_total_cost + req_total_est_cost + swarm_total_cost
 
     session_by_model = {}
-    for source in (prior_main_by_model, prior_subs, req_main_by_model, req_subs):
+    for source in (prior_main_by_model, prior_subs, req_main_by_model, req_subs, swarm_by_model):
         for k, v in source.items():
             _add_stats(session_by_model.setdefault(k, _empty_stats()), v)
     active_sess = session_by_model.setdefault(active_model, _empty_stats())
     active_sess["responses"] += 1
     active_sess["cost"] += est_final_step_cost
 
-    sub_parts = []
-    for k, v in req_subs.items():
-        tc_cnt = v["tool_calls"]
-        resp_cnt = v["responses"]
-        c_val = v["cost"]
-        sub_parts.append(f"{k}: {tc_cnt} tool calls, {resp_cnt} resp, cost=${c_val:.4f}")
-    sub_str = "; ".join(sub_parts) if sub_parts else "none"
+    sess_total_tc = sum(v["tool_calls"] for v in session_by_model.values())
+    sess_total_resp = sum(v["responses"] for v in session_by_model.values())
 
-    sess_model_parts = []
-    for k, v in session_by_model.items():
-        sess_model_parts.append(
+    def _fmt_map(m: dict) -> str:
+        if not m:
+            return "none"
+        return "; ".join(
             f"{k}: {v['tool_calls']} tool calls, {v['responses']} resp, cost=${v['cost']:.4f}"
+            for k, v in m.items()
         )
-    sess_model_str = "; ".join(sess_model_parts) if sess_model_parts else "none"
+
+    sub_str = _fmt_map(req_subs)
+    swarm_str = _fmt_map(swarm_by_model)
+    sess_model_str = _fmt_map(session_by_model)
 
     req_tc = req_main["tool_calls"]
     req_c_done = req_main["cost"]
@@ -314,9 +405,11 @@ def main():
         f"cost_completed_steps=${req_c_done:.4f}, "
         f"est_cost_including_this_final_response=${req_main_est_cost:.4f} | "
         f"CurrentRequestSubagents: {sub_str} | "
+        f"SwarmWorkers: {swarm_str} | "
         f"CurrentRequestTotalEstCost=${req_total_est_cost:.4f} | "
         f"SessionPriorRequests: tool_calls={prior_total_tc}, responses={prior_total_resp}, cost=${prior_total_cost:.4f} | "
         f"SessionAggregateByModel: {sess_model_str} | "
+        f"SessionAggregateTotals: tool_calls={sess_total_tc}, responses={sess_total_resp} | "
         f"SessionAggregateEstCost=${session_est_cost:.4f}]"
     )
 

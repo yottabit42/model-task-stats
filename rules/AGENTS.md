@@ -13,13 +13,14 @@ At the very end of every completed user request (after all tool calls, subagent 
   `<Total> (<N> tool calls, <M> response)` (using singular `tool call` / `response` when `1`, and `responses` when `> 1`).
   - Example with 4 tool calls and 1 final response: `5 (4 tool calls, 1 response)`
   - Example for a pure Q&A turn with 0 tool calls: `1 (0 tool calls, 1 response)`
-- For per-model session aggregates, render one `*<Model Name> (Session)*` row per entry in `SessionAggregateByModel` from `[Model Task & Cost Telemetry ...]` (showing cumulative tool calls, responses, and cost for each model used across the session).
-- For the `**Session Aggregate**` row, add the current request's tasks (`tool calls` and `responses`) to the `SessionPriorRequests` counts injected by `[Model Task & Cost Telemetry ...]`.
+- For per-model session aggregates, render one `*<Model Name> (Session)*` row per entry in `SessionAggregateByModel` from `[Model Task & Cost Telemetry ...]` (showing cumulative tool calls, responses, and cost for every main model, subagent tier, and `/swarm` worker model such as `Claude Opus 5.5 (Swarm)`, `Claude Sonnet 5.5 (Swarm)`, `GPT-OSS 120B (Swarm)`, or `Gemini Flash (Swarm)`).
+- For the `**Session Aggregate**` row, use `SessionAggregateTotals` (`tool_calls`, `responses`) and `SessionAggregateEstCost` (or sum the current request's tasks with `SessionPriorRequests` and `SwarmWorkers` if `SessionAggregateTotals` is absent).
 
 ## 3. How to Identify Models and Thinking Levels
 - **Model Name**:
   1. Use the human-readable model name from `<USER_SETTINGS_CHANGE>` or `MainModel` in `[Model Task & Cost Telemetry ...]` (e.g., `Gemini 4 Neon`, `Gemini 4 Hydrogen`, `Gemini 4 Carbon`, `Gemini 4 Argon`, `Orchestrator (Neon)`, `Orchestrator (Carbon)`, `Orchestrator (Argon)`, `Gemini 3.8 Flash`, `Claude Opus 5.5`, `Claude Sonnet 5.5`, `GPT-OSS 120B`).
   2. For subagents dispatched via `invoke_subagent`, label the model by its resolved tier/name (e.g., `Gemini Flash *(Subagent)*` when `Model: "flash"` or `TypeName: "*-flash"`, `Gemini Flash-Lite *(Subagent)*` for `flash_lite`, `Gemini Pro *(Subagent)*` for `pro`, or `<Main Model> *(Subagent)*` for `inherit`).
+  3. For `/swarm` workers discovered in `SwarmWorkers`, preserve the worker's per-step model label with `*(Swarm)*` (e.g., `Claude Opus 5.5 *(Swarm)*`, `Claude Sonnet 5.5 *(Swarm)*`, `GPT-OSS 120B *(Swarm)*`, `Gemini Flash *(Swarm)*`).
 - **Thinking Level**:
   - Read `EFFORT LEVEL: <value>` from your system instructions (and/or `Thinking` in `[Model Task & Cost Telemetry ...]` / `<USER_SETTINGS_CHANGE>`) and format as:
     - `XHigh` (when `Thinking="XHigh"` or `EFFORT LEVEL` is extra-high) -> ``XHigh (`<EFFORT_LEVEL>`)``

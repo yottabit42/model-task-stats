@@ -8,8 +8,8 @@ An Antigravity (`agy`) plugin and skill that automatically tracks per-request an
 
 1. **Lifecycle Hook (`hooks.json` + `scripts/inject-model.sh`)**
    - Registers a `PreInvocation` command hook (`./scripts/inject-model.sh`) that runs before each model call.
-   - Reads the active conversation's `transcript.jsonl` (provided via `transcriptPath` on `stdin`), splits it at the most recent `USER_INPUT` into **prior session requests** and the **current request**, and walks `PLANNER_RESPONSE` steps to sum `input_tokens`, `cache_read_tokens`, `output_tokens`, tool calls, and responses.
-   - Tracks `invoke_subagent` calls in a FIFO queue (`collections.deque`) and matches them to `logAbsoluteUri` subagent transcripts (deduplicated per URI) so parallel subagents are all accounted for.
+   - Reads the active conversation's `transcript.jsonl` (provided via `transcriptPath` on `stdin`), splits it at the most recent `USER_INPUT` into **prior session requests** and the **current request**, and walks `PLANNER_RESPONSE` steps using each step's recorded `"model"` (accurately capturing `Orchestrator` per-step routing such as `gemini-pro-orchestrator-neon` vs. `gemini-flash-worker-agy`) to sum `input_tokens`, `cache_read_tokens`, `output_tokens`, tool calls, and responses.
+   - Tracks `invoke_subagent` calls in a FIFO queue (`collections.deque`) matched to `logAbsoluteUri` subagent transcripts, and discovers `/swarm` workers (including non-Gemini models like `Claude Opus 5.5`, `Claude Sonnet 5.5`, and `GPT-OSS 120B`, as well as nested helper workers and mid-run model switches) from `.system_generated/swarm/members.json`.
    - Resolves the active model and thinking level from `<USER_SETTINGS_CHANGE>` banners or the runtime `modelName` slug (e.g. `gemini-4-hydrogen-medium`, `gemini-4-hydrogen-xhigh`, `claude-opus-5-5-high`, `gemini-pro-orchestrator`).
    - Computes date-aware retail API costs (including upcoming December 2026 / January 2027 rate transitions), aggregates cumulative per-model totals across the session (`SessionAggregateByModel`), and injects a `[Model Task & Cost Telemetry ...]` `<SYSTEM_MESSAGE>` into the prompt context.
 
